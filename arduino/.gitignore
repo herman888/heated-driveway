@@ -1,0 +1,7 @@
+# Arduino IDE build output (varies by setup)
+.arduino/
+build/
+*.hex
+*.elf
+*.bin
+
