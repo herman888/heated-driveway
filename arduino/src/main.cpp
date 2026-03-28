@@ -16,7 +16,7 @@
 // ---------------------------
 static const uint8_t PIN_MOISTURE_ADC = A0;  // Grove moisture analog output (estimated)
 static const uint8_t PIN_TEMP_ADC = A2;     // Grove temperature analog output (estimated)
-static const uint8_t PIN_RELAY = 2;          // Relay control pin (D2)
+static const uint8_t PIN_RELAY = 7;          // Relay control pin (Grove D7)
 
 // Many relay modules are "active LOW" on their IN pin.
 // If your relay turns ON when you write LOW, keep this true.

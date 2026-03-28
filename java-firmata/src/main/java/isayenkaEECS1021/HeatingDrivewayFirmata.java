@@ -15,6 +15,7 @@ public class HeatingDrivewayFirmata {
         static final int A1 = 15; // Arduino UNO A1 -> Firmata index 15
         static final int A2 = 16; // Arduino UNO A2 -> Firmata index 16
         static final int D2 = 2;
+        static final int D7 = 7; // Grove relay on D7
     }
 
     // Many relay modules are "active LOW" on their IN pin (LOW = relay ON).
@@ -43,9 +44,9 @@ public class HeatingDrivewayFirmata {
     static final float TEMP_FREEZING_ON_C = 0.0f;   // snow candidate when tempC <= this
     static final float TEMP_FREEZING_OFF_C = 2.0f;  // turn relay OFF when tempC >= this
 
-    static final long SNOW_CONFIRM_MS = 30_000;     // must persist this long
-    static final long MIN_HEATING_ON_MS = 60_000;  // once ON, keep at least this long
-    static final long MAX_HEATING_ON_MS = 600_000; // max ON duration safety
+    static final long SNOW_CONFIRM_MS = 30_000;      // must persist this long
+    static final long MIN_HEATING_ON_MS = 60_000;    // once ON, keep at least this long
+    static final long MAX_HEATING_ON_MS = 600_000;   // max ON duration safety
     static final long HEATING_COOLDOWN_MS = 120_000; // wait after turning off
 
     static final long READ_INTERVAL_MS = 10_000; // print/update interval for debugging
@@ -96,7 +97,7 @@ public class HeatingDrivewayFirmata {
                 } else if (eventIdx == idxTempA2) {
                     cache.tempAdcA2 = (int) tempPinA2.getValue();
                 }
-            } catch (Exception e) {
+            } catch (Exception ignored) {
                 // Keep going; will re-sync on next pin event.
             }
         }
@@ -134,35 +135,29 @@ public class HeatingDrivewayFirmata {
         try {
             relayPin.setValue(level ? 1L : 0L);
         } catch (Exception e) {
-            // Fail-safe intent: if we can't control the relay, surface it loudly.
             throw new RuntimeException("Relay write failed", e);
         }
     }
 
     public static void main(String[] args) throws IOException, InterruptedException {
         // Update this for your system/port.
-        // You used "/dev/cu.usbserial-0001" in labs; keep that if it matches yours.
         String port = "/dev/cu.usbserial-0001";
 
         IODevice arduino = new FirmataDevice(port);
         arduino.start();
-        System.out.println("Board starting…");
+        System.out.println("Board starting...");
         arduino.ensureInitializationIsDone();
 
-        // Debug: read both A0 and A1 so we can quickly spot a miswire.
         Pin moisturePinA0 = arduino.getPin(Pins.A0);
         Pin moisturePinA1 = arduino.getPin(Pins.A1);
         Pin tempPin = arduino.getPin(Pins.A2);
-        Pin relayPin = arduino.getPin(Pins.D2);
+        Pin relayPin = arduino.getPin(Pins.D7);
 
         moisturePinA0.setMode(Pin.Mode.ANALOG);
         moisturePinA1.setMode(Pin.Mode.ANALOG);
         tempPin.setMode(Pin.Mode.ANALOG);
         relayPin.setMode(Pin.Mode.OUTPUT);
 
-        // IMPORTANT:
-        // Firmata analog values are updated via pin-change events.
-        // Without a listener, some pins can appear "stuck" (often near 1023).
         Cache cache = new Cache();
         AnalogCacheListener listener = new AnalogCacheListener(moisturePinA0, moisturePinA1, tempPin, cache);
         arduino.addEventListener(listener);
@@ -175,7 +170,6 @@ public class HeatingDrivewayFirmata {
         long heatingStartedAtMs = 0;
         long cooldownEndsAtMs = 0;
         long faultEnteredAtMs = 0;
-
         long lastPrintAtMs = 0;
 
         try {
@@ -193,20 +187,13 @@ public class HeatingDrivewayFirmata {
 
                 float tempC = (tempAdc >= 0) ? adcToTempC(tempAdc) : -999.0f;
 
-                // Use A0 for the state machine by default.
-                // If your moisture sensor is wired to A1, change this assignment.
                 boolean moistureValid = moistureAdcA0 >= 0;
                 boolean moistureLikelySaturated = moistureAdcA0 >= 1020 && moistureAdcA1 >= 1020;
-
                 int moistureAdc = moistureValid ? moistureAdcA0 : 0;
-
                 boolean tempOk = tempIsValid(tempC);
 
-                // If moisture reads "stuck high", treat it as not-a-decision and keep relay OFF.
-                // This prevents actuation during wiring/debug failures.
                 boolean wet = moistureValid && !moistureLikelySaturated && moistureIsWet(moistureAdc);
                 boolean dry = moistureValid && !moistureLikelySaturated && moistureIsDry(moistureAdc);
-
                 boolean snowCandidate = wet && tempOk && (tempC <= TEMP_FREEZING_ON_C);
 
                 if (!tempOk && state != State.FAULT) {
@@ -244,8 +231,6 @@ public class HeatingDrivewayFirmata {
                     }
                     case HEATING_ON: {
                         relaySet(relayPin, true);
-
-                        // Safety max ON duration
                         if (nowMs - heatingStartedAtMs >= MAX_HEATING_ON_MS) {
                             relaySet(relayPin, false);
                             state = State.COOLDOWN;
@@ -284,13 +269,13 @@ public class HeatingDrivewayFirmata {
                     }
                 }
 
-                // Debug print: only moisture + temperature (but show A0+A1 so you can debug wiring).
                 System.out.printf(
                         "moistureA0=%d moistureA1=%d tempC=%.2f%n",
                         moistureAdcA0, moistureAdcA1, tempC
                 );
                 if (moistureLikelySaturated) {
-                    System.out.println("WARNING: moisture ADC saturated (~1023). Check SIG/GND wiring and that you're using the analog output version of the moisture sensor.");
+                    System.out.println(
+                            "WARNING: moisture ADC saturated (~1023). Check SIG/GND wiring and that you're using the analog output version of the moisture sensor.");
                 }
             }
         } finally {
