@@ -414,8 +414,8 @@
         } else if (j.state === 'MOISTURE_TEST') {
           pillClass = 'connecting';
           pillText = 'Moisture test';
-          headline = 'Live A0 probe test';
-          sub = j.note || 'Watching A0 every ~300 ms — wet the sensor; ADC should change off ~1023.';
+          headline = 'Live moisture ADC test';
+          sub = j.note || 'Watching configured moisture pin + A0/A1 (~300 ms). Wet the probe; counts should move on the active channel.';
         } else if (j.state === 'IDLE') {
           pillClass = 'idle';
           pillText = 'Idle';
@@ -468,7 +468,7 @@
       }
     }
     poll();
-    setInterval(poll, 2000);
+    setInterval(poll, 10000);
   </script>
 </body>
 </html>

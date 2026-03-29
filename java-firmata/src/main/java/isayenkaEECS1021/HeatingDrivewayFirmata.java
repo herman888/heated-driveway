@@ -52,14 +52,14 @@ public class HeatingDrivewayFirmata {
     // Phone alert when heating starts: install ntfy app, pick a secret topic, then:
     // export NTFY_TOPIC=your-secret-topic
 
-    /**
-     * Grove moisture **SIG** (Firmata index). Uno: {@code 14–19} only ({@code getPin(20)} crashes on Uno).
-     * Your scan: A0 ~1023, A1 active (~730 dry) → {@code Pins.A1}.
-     */
+    /** Grove moisture **SIG** — which analog pin feeds the wet/dry state machine (Yours: {@link Pins#A1}). */
     static final int MOISTURE_ANALOG_FIRMATA_PIN = Pins.A1;
 
-    // Moisture: second sensor optional; see USE_MOISTURE_A1_FOR_LOGIC.
-    static final boolean USE_MOISTURE_A1_FOR_LOGIC = false;
+    /**
+     * If true, both physical {@link Pins#A0} and {@link Pins#A1} must read “stuck high” to treat moisture as invalid.
+     * Default false: only {@link #MOISTURE_ANALOG_FIRMATA_PIN} is used for saturation + wet/dry.
+     */
+    static final boolean USE_DUAL_MOISTURE_STUCK_CHECK = false;
     /** At or above this, state machine ignores moisture (open/GND typo / wrong port). */
     static final int MOISTURE_ADC_STUCK_HIGH = 1020;
     /** Debug: treat as “not a real moisture signal” (noise near rail still useless). */
@@ -71,14 +71,13 @@ public class HeatingDrivewayFirmata {
     static final int MOISTURE_WET_ADC_THRESHOLD = 650; // wet when <= this
     static final int MOISTURE_DRY_ADC_THRESHOLD = 700; // dry when >= this (hysteresis)
 
-    /** Extra Serial / Run log lines while you debug A0 wiring and thresholds. */
+    /** Extra Serial / Run log lines for moisture thresholds. */
     static final boolean MOISTURE_DEBUG_LOG = true;
 
     /**
-     * Like {@code analogRead(A0)} in a loop — no heating state machine, no Arduino IDE.
-     * Set {@code true} while you fix wiring; set {@code false} for normal driveway control.
+     * If true, only prints the configured moisture pin + temp (no full state machine).
      */
-    static final boolean MOISTURE_RAW_DEBUG_MODE = false; // true = spam A1 read; false = normal heating state machine
+    static final boolean MOISTURE_RAW_DEBUG_MODE = false;
     static final long MOISTURE_RAW_POLL_MS = 300;
 
     // Control thresholds
@@ -90,8 +89,15 @@ public class HeatingDrivewayFirmata {
     static final long MAX_HEATING_ON_MS = 600_000;   // max ON duration safety
     static final long HEATING_COOLDOWN_MS = 120_000; // wait after turning off
 
-    static final long READ_INTERVAL_MS = 10_000; // print/update interval for debugging
+    /** Console log + dashboard `/api/status` JSON — once every this many ms (Firmata still updates cache on pin events). */
+    static final long READ_INTERVAL_MS = 10_000;
     static final long FAULT_RECOVER_DELAY_MS = 5000;
+
+    /**
+     * Low-pass filter on A2 ADC each {@link #READ_INTERVAL_MS} tick (not each Firmata IRQ — keeps noise from looks like 100→90→120).
+     * EMA: {@code smooth = α·raw + (1-α)·smooth}. Higher α (e.g. 0.35) follows faster; lower (e.g. 0.18) is steadier.
+     */
+    static final float TEMP_ADC_SMOOTH_ALPHA = 0.28f;
 
     enum State {
         IDLE,
@@ -102,28 +108,28 @@ public class HeatingDrivewayFirmata {
     }
 
     static final class Cache {
-        // Updated by Firmata pin-change events (use volatile so main loop sees updates).
+        /** Physical Arduino A0 / A1 (JSON {@code moistureA0} / {@code moistureA1}); dashboard matches silkscreen. */
         volatile int moistureAdcA0 = -1;
         volatile int moistureAdcA1 = -1;
         volatile int tempAdcA2 = -1;
     }
 
     static final class AnalogCacheListener implements IODeviceEventListener {
-        private final Pin moisturePinA0;
-        private final Pin moisturePinA1;
-        private final Pin tempPinA2;
-        private final int idxMoistureA0;
-        private final int idxMoistureA1;
+        private final Pin pinA0;
+        private final Pin pinA1;
+        private final Pin pinTempA2;
+        private final int idxA0;
+        private final int idxA1;
         private final int idxTempA2;
         private final Cache cache;
 
-        AnalogCacheListener(Pin moisturePinA0, Pin moisturePinA1, Pin tempPinA2, Cache cache) {
-            this.moisturePinA0 = moisturePinA0;
-            this.moisturePinA1 = moisturePinA1;
-            this.tempPinA2 = tempPinA2;
-            this.idxMoistureA0 = moisturePinA0.getIndex();
-            this.idxMoistureA1 = moisturePinA1.getIndex();
-            this.idxTempA2 = tempPinA2.getIndex();
+        AnalogCacheListener(Pin pinA0, Pin pinA1, Pin pinTempA2, Cache cache) {
+            this.pinA0 = pinA0;
+            this.pinA1 = pinA1;
+            this.pinTempA2 = pinTempA2;
+            this.idxA0 = pinA0.getIndex();
+            this.idxA1 = pinA1.getIndex();
+            this.idxTempA2 = pinTempA2.getIndex();
             this.cache = cache;
         }
 
@@ -131,12 +137,12 @@ public class HeatingDrivewayFirmata {
         public void onPinChange(IOEvent event) {
             try {
                 long eventIdx = event.getPin().getIndex();
-                if (eventIdx == idxMoistureA0) {
-                    cache.moistureAdcA0 = (int) moisturePinA0.getValue();
-                } else if (eventIdx == idxMoistureA1) {
-                    cache.moistureAdcA1 = (int) moisturePinA1.getValue();
+                if (eventIdx == idxA0) {
+                    cache.moistureAdcA0 = (int) pinA0.getValue();
+                } else if (eventIdx == idxA1) {
+                    cache.moistureAdcA1 = (int) pinA1.getValue();
                 } else if (eventIdx == idxTempA2) {
-                    cache.tempAdcA2 = (int) tempPinA2.getValue();
+                    cache.tempAdcA2 = (int) pinTempA2.getValue();
                 }
             } catch (Exception ignored) {
                 // Keep going; will re-sync on next pin event.
@@ -178,8 +184,15 @@ public class HeatingDrivewayFirmata {
         }
     }
 
+    /**
+     * {@code tempAdc < 0} means no Firmata sample yet — invalid for decisions, but must not be treated as a out-of-range fault
+     * (previously we fell through to the °C check with {@code tempC == -999} and tripped FAULT immediately).
+     */
     private static boolean tempIsValid(float tempC, int tempAdc) {
-        if (TEMP_VALIDITY_USE_RAW_ADC && tempAdc >= 0) {
+        if (tempAdc < 0) {
+            return false;
+        }
+        if (TEMP_VALIDITY_USE_RAW_ADC) {
             return tempAdc >= TEMP_ADC_VALID_MIN && tempAdc <= TEMP_ADC_VALID_MAX;
         }
         return tempC >= TEMP_MIN_VALID_C && tempC <= TEMP_MAX_VALID_C;
@@ -192,22 +205,28 @@ public class HeatingDrivewayFirmata {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    /**
+     * @param tempAdc       smoothed ADC (what drives {@code tempC} and heating logic)
+     * @param tempAdcRaw    sample from Firmata this tick (same as {@code tempAdc} when invalid / first tick)
+     */
     private static String buildStatusJson(
             State state,
             int moistureA0,
             int moistureA1,
             int tempAdc,
+            int tempAdcRaw,
             float tempC,
             boolean relayOn
     ) {
         return String.format(
                 Locale.ROOT,
-                "{\"state\":\"%s\",\"relayOn\":%s,\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempC\":%.2f,\"ts\":%d}",
+                "{\"state\":\"%s\",\"relayOn\":%s,\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempAdcRaw\":%d,\"tempC\":%.2f,\"ts\":%d}",
                 jsonEscape(state.name()),
                 relayOn ? "true" : "false",
                 moistureA0,
                 moistureA1,
                 tempAdc,
+                tempAdcRaw,
                 tempC,
                 System.currentTimeMillis()
         );
@@ -230,6 +249,17 @@ public class HeatingDrivewayFirmata {
             return "A" + n;
         }
         return "firmata#" + firmataIndex;
+    }
+
+    /** ADC used for wet/dry / snow logic from {@link #MOISTURE_ANALOG_FIRMATA_PIN}. */
+    private static int moistureAdcPrimary(Cache cache) {
+        if (MOISTURE_ANALOG_FIRMATA_PIN == Pins.A0) {
+            return cache.moistureAdcA0;
+        }
+        if (MOISTURE_ANALOG_FIRMATA_PIN == Pins.A1) {
+            return cache.moistureAdcA1;
+        }
+        return -1;
     }
 
     private static String buildErrorStatusJson(String message) {
@@ -271,8 +301,9 @@ public class HeatingDrivewayFirmata {
         }
 
         IODevice arduino;
-        Pin moisturePinA0;
-        Pin moisturePinA1;
+        Pin pinAnalogA0;
+        Pin pinAnalogA1;
+        Pin pinMoistureForLogic;
         Pin tempPin;
         Pin relayPin;
         Cache cache;
@@ -282,20 +313,19 @@ public class HeatingDrivewayFirmata {
             System.out.println("Board starting...");
             arduino.ensureInitializationIsDone();
 
-            moisturePinA0 = arduino.getPin(MOISTURE_ANALOG_FIRMATA_PIN);
-            moisturePinA1 = arduino.getPin(Pins.A1);
+            pinAnalogA0 = arduino.getPin(Pins.A0);
+            pinAnalogA1 = arduino.getPin(Pins.A1);
+            pinMoistureForLogic = arduino.getPin(MOISTURE_ANALOG_FIRMATA_PIN);
             tempPin = arduino.getPin(Pins.A2);
             relayPin = arduino.getPin(Pins.D7);
 
-            moisturePinA0.setMode(Pin.Mode.ANALOG);
-            if (USE_MOISTURE_A1_FOR_LOGIC) {
-                moisturePinA1.setMode(Pin.Mode.ANALOG);
-            }
+            pinAnalogA0.setMode(Pin.Mode.ANALOG);
+            pinAnalogA1.setMode(Pin.Mode.ANALOG);
             tempPin.setMode(Pin.Mode.ANALOG);
             relayPin.setMode(Pin.Mode.OUTPUT);
 
             cache = new Cache();
-            AnalogCacheListener listener = new AnalogCacheListener(moisturePinA0, moisturePinA1, tempPin, cache);
+            AnalogCacheListener listener = new AnalogCacheListener(pinAnalogA0, pinAnalogA1, tempPin, cache);
             arduino.addEventListener(listener);
             // Prime analog cache (Firmata sometimes delays the first pin-change events).
             try {
@@ -304,20 +334,23 @@ public class HeatingDrivewayFirmata {
                 Thread.currentThread().interrupt();
             }
             try {
-                cache.moistureAdcA0 = (int) moisturePinA0.getValue();
-                cache.moistureAdcA1 = USE_MOISTURE_A1_FOR_LOGIC ? (int) moisturePinA1.getValue() : -1;
+                cache.moistureAdcA0 = (int) pinAnalogA0.getValue();
+                cache.moistureAdcA1 = (int) pinAnalogA1.getValue();
                 cache.tempAdcA2 = (int) tempPin.getValue();
+                String logicPin = analogPinLabel(MOISTURE_ANALOG_FIRMATA_PIN);
                 System.out.printf(
-                        "Analog snapshot: moistureA0=%d moistureA1=%s tempAdc=%d%n",
+                        Locale.ROOT,
+                        "Analog snapshot: A0=%d A1=%d (wet/dry uses %s=%d) tempAdc(A2)=%d%n",
                         cache.moistureAdcA0,
-                        USE_MOISTURE_A1_FOR_LOGIC ? String.valueOf(cache.moistureAdcA1) : "(unused)",
+                        cache.moistureAdcA1,
+                        logicPin,
+                        moistureAdcPrimary(cache),
                         cache.tempAdcA2
                 );
                 System.out.println(
-                        "  -> Moisture on " + analogPinLabel(MOISTURE_ANALOG_FIRMATA_PIN)
-                                + "; wet if ADC <= " + MOISTURE_WET_ADC_THRESHOLD
-                                + " (dry if ADC >= " + MOISTURE_DRY_ADC_THRESHOLD + ") with MOISTURE_WET_IS_HIGH="
-                                + MOISTURE_WET_IS_HIGH
+                        "  -> Wet if ADC <= " + MOISTURE_WET_ADC_THRESHOLD
+                                + " (dry if ADC >= " + MOISTURE_DRY_ADC_THRESHOLD + ") on " + logicPin
+                                + "; MOISTURE_WET_IS_HIGH=" + MOISTURE_WET_IS_HIGH
                 );
             } catch (Exception e) {
                 System.out.println("Analog prime read failed (will rely on pin events): " + e.getMessage());
@@ -338,29 +371,31 @@ public class HeatingDrivewayFirmata {
 
         if (MOISTURE_RAW_DEBUG_MODE) {
             String mLbl = analogPinLabel(MOISTURE_ANALOG_FIRMATA_PIN);
-            System.out.println("======== MOISTURE_RAW_DEBUG_MODE (Java — no Arduino IDE) ========");
+            System.out.println("======== MOISTURE_RAW_DEBUG_MODE ========");
             System.out.printf(
                     Locale.ROOT,
-                    "Every %d ms: moisture %s, temp A2. Your tempAdc changes → Firmata analog works. "
-                            + "Moisture stuck ~1023 → SIG not on %s (try MOISTURE_ANALOG_FIRMATA_PIN = Pins.A1 if cable is in A1).%n",
+                    "Every %d ms: logic pin %s + physical A0/A1 + temp A2.%n",
                     MOISTURE_RAW_POLL_MS,
-                    mLbl,
                     mLbl
             );
-            System.out.println("Set MOISTURE_RAW_DEBUG_MODE = false when moisture responds to water.");
+            System.out.println("Set MOISTURE_RAW_DEBUG_MODE = false for normal heating control.");
             try {
                 while (!Thread.currentThread().isInterrupted()) {
-                    int a0 = (int) moisturePinA0.getValue();
+                    int mLogic = (int) pinMoistureForLogic.getValue();
+                    int adcA0 = (int) pinAnalogA0.getValue();
+                    int adcA1 = (int) pinAnalogA1.getValue();
                     int tAdc = (int) tempPin.getValue();
                     float tC = (tAdc >= 0) ? adcToTempC(tAdc) : -999.0f;
-                    boolean stuck = a0 >= MOISTURE_ADC_DEBUG_UNUSABLE;
-                    boolean wetGuess = moistureIsWet(a0);
+                    boolean stuck = mLogic >= MOISTURE_ADC_DEBUG_UNUSABLE;
+                    boolean wetGuess = moistureIsWet(mLogic);
                     System.out.printf(
                             Locale.ROOT,
-                            "%s=%4d  %s  tempAdc=%4d  wouldWet=%s (wet if ADC %s %d)%n",
+                            "%s=%4d  A0=%4d A1=%4d  %s  tempAdc=%4d  wouldWet=%s (wet if ADC %s %d)%n",
                             mLbl,
-                            a0,
-                            stuck ? "NO_SENSOR_SIGNAL(use analog SIG+GND+VCC on " + mLbl + ")" : "range OK",
+                            mLogic,
+                            adcA0,
+                            adcA1,
+                            stuck ? "STUCK_HIGH(check SIG/GND/VCC on " + mLbl + ")" : "range OK",
                             tAdc,
                             wetGuess,
                             MOISTURE_WET_IS_HIGH ? ">=" : "<=",
@@ -369,14 +404,15 @@ public class HeatingDrivewayFirmata {
                     if (http != null) {
                         http.setStatusJson(String.format(
                                 Locale.ROOT,
-                                "{\"state\":\"MOISTURE_TEST\",\"relayOn\":false,\"moistureA0\":%d,\"moistureA1\":-1,\"tempAdc\":%d,\"tempC\":%.2f,\"ts\":%d,\"note\":\"%s\"}",
-                                a0,
+                                "{\"state\":\"MOISTURE_TEST\",\"relayOn\":false,\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempC\":%.2f,\"ts\":%d,\"note\":\"%s\"}",
+                                adcA0,
+                                adcA1,
                                 tAdc,
                                 tC,
                                 System.currentTimeMillis(),
                                 jsonEscape(stuck
-                                        ? mLbl + " ~max: wire Grove analog SIG to shield " + mLbl
-                                        : mLbl + " responsive — wet/dry should move ADC")
+                                        ? mLbl + " ~max: check wiring to " + mLbl
+                                        : mLbl + " OK — wet/dry should move ADC on " + mLbl)
                         ));
                     }
                     try {
@@ -409,6 +445,7 @@ public class HeatingDrivewayFirmata {
         long cooldownEndsAtMs = 0;
         long faultEnteredAtMs = 0;
         long lastPrintAtMs = 0;
+        Float tempAdcEma = null;
 
         try {
             while (!Thread.currentThread().isInterrupted()) {
@@ -421,23 +458,35 @@ public class HeatingDrivewayFirmata {
 
                 int moistureAdcA0 = cache.moistureAdcA0;
                 int moistureAdcA1 = cache.moistureAdcA1;
-                int tempAdc = cache.tempAdcA2;
+                int moistureAdcP = moistureAdcPrimary(cache);
+                int tempAdcRaw = cache.tempAdcA2;
+                int tempAdc;
+                if (tempAdcRaw >= 0) {
+                    if (tempAdcEma == null) {
+                        tempAdcEma = (float) tempAdcRaw;
+                    } else {
+                        tempAdcEma = TEMP_ADC_SMOOTH_ALPHA * tempAdcRaw
+                                + (1f - TEMP_ADC_SMOOTH_ALPHA) * tempAdcEma;
+                    }
+                    tempAdc = Math.round(tempAdcEma);
+                } else {
+                    tempAdc = -1;
+                }
 
                 float tempC = (tempAdc >= 0) ? adcToTempC(tempAdc) : -999.0f;
 
-                boolean moistureValid = moistureAdcA0 >= 0;
-                // A1 ignored when USE_MOISTURE_A1_FOR_LOGIC is false (floating A1 must not block you).
-                boolean moistureLikelySaturated = USE_MOISTURE_A1_FOR_LOGIC
+                boolean moistureValid = moistureAdcP >= 0;
+                boolean moistureLikelySaturated = USE_DUAL_MOISTURE_STUCK_CHECK
                         ? (moistureAdcA0 >= MOISTURE_ADC_STUCK_HIGH && moistureAdcA1 >= MOISTURE_ADC_STUCK_HIGH)
-                        : (moistureAdcA0 >= MOISTURE_ADC_STUCK_HIGH);
-                int moistureAdc = moistureValid ? moistureAdcA0 : 0;
-                boolean tempOk = tempIsValid(tempC, tempAdc);
+                        : (moistureAdcP >= MOISTURE_ADC_STUCK_HIGH);
+                int moistureAdc = moistureValid ? moistureAdcP : 0;
+                boolean tempOk = tempIsValid(tempC, tempAdc); // smoothed ADC — avoids FAULT/heating chatter from single noisy raw sample
 
                 boolean wet = moistureValid && !moistureLikelySaturated && moistureIsWet(moistureAdc);
                 boolean dry = moistureValid && !moistureLikelySaturated && moistureIsDry(moistureAdc);
                 boolean snowCandidate = wet && tempOk && (tempC <= TEMP_FREEZING_ON_C);
 
-                if (!tempOk && state != State.FAULT) {
+                if (tempAdc >= 0 && !tempOk && state != State.FAULT) {
                     state = State.FAULT;
                     faultEnteredAtMs = nowMs;
                     relaySet(relayPin, false);
@@ -513,15 +562,24 @@ public class HeatingDrivewayFirmata {
                 }
 
                 System.out.printf(
-                        "moistureA0=%d moistureA1=%d tempAdc=%d tempC=%.2f | state=%s%n",
-                        moistureAdcA0, moistureAdcA1, tempAdc, tempC, state
+                        Locale.ROOT,
+                        "A0=%d A1=%d logic(%s)=%d tempAdc raw=%d sm=%d tempC=%.2f | state=%s%n",
+                        moistureAdcA0,
+                        moistureAdcA1,
+                        analogPinLabel(MOISTURE_ANALOG_FIRMATA_PIN),
+                        moistureAdcP,
+                        tempAdcRaw >= 0 ? tempAdcRaw : -1,
+                        tempAdc,
+                        tempC,
+                        state
                 );
                 if (MOISTURE_DEBUG_LOG) {
                     System.out.printf(
-                            "  moistureDebug: valid=%s stuckHigh=%s (A0-only=%s) wet=%s dry=%s snowCandidate=%s%n",
+                            Locale.ROOT,
+                            "  moistureDebug: valid=%s stuckHigh=%s dualCheck=%s wet=%s dry=%s snowCandidate=%s%n",
                             moistureValid,
                             moistureLikelySaturated,
-                            !USE_MOISTURE_A1_FOR_LOGIC,
+                            USE_DUAL_MOISTURE_STUCK_CHECK,
                             wet,
                             dry,
                             snowCandidate
@@ -546,7 +604,8 @@ public class HeatingDrivewayFirmata {
 
                 boolean relayOnForUi = state == State.HEATING_ON;
                 if (http != null) {
-                    http.setStatusJson(buildStatusJson(state, moistureAdcA0, moistureAdcA1, tempAdc, tempC, relayOnForUi));
+                    int rawForJson = tempAdcRaw >= 0 ? tempAdcRaw : -1;
+                    http.setStatusJson(buildStatusJson(state, moistureAdcA0, moistureAdcA1, tempAdc, rawForJson, tempC, relayOnForUi));
                 }
             }
         } finally {
