@@ -411,6 +411,11 @@
           pillText = 'Error';
           headline = 'Could not connect';
           sub = j.error || 'Check USB, port, and StandardFirmata.';
+        } else if (j.state === 'MOISTURE_TEST') {
+          pillClass = 'connecting';
+          pillText = 'Moisture test';
+          headline = 'Live A0 probe test';
+          sub = j.note || 'Watching A0 every ~300 ms — wet the sensor; ADC should change off ~1023.';
         } else if (j.state === 'IDLE') {
           pillClass = 'idle';
           pillText = 'Idle';

@@ -14,7 +14,8 @@
 // ---------------------------
 // PIN CONFIG (assumptions)
 // ---------------------------
-static const uint8_t PIN_MOISTURE_ADC = A0;  // Grove moisture analog output (estimated)
+// Uno: A0–A5 only. A6 only on some Nanos.
+static const uint8_t PIN_MOISTURE_ADC = A0;
 static const uint8_t PIN_TEMP_ADC = A2;     // Grove temperature analog output (estimated)
 static const uint8_t PIN_RELAY = 7;          // Relay control pin (Grove D7)
 
