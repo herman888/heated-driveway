@@ -7,6 +7,7 @@ import org.firmata4j.Pin;
 import org.firmata4j.firmata.FirmataDevice;
 
 import java.io.IOException;
+import java.util.Locale;
 
 public class HeatingDrivewayFirmata {
 
@@ -30,9 +31,20 @@ public class HeatingDrivewayFirmata {
     static final float TMP36_V_AT_0C = 0.5f;
     static final float TMP_SCALE_C_PER_V = 100.0f;
 
-    // Temperature plausibility bounds (prevents garbage->unsafe actuation)
+    // Temperature plausibility bounds (prevents garbage->unsafe actuation).
+    // Your bench notes (raw A2 ADC): ~40–70 at room, ~220–270 when the pad warms the sensor.
+    // TMP36-style °C math may not match your part; validating raw ADC avoids false FAULT spam.
     static final float TEMP_MIN_VALID_C = -20.0f;
     static final float TEMP_MAX_VALID_C = 60.0f;
+    static final boolean TEMP_VALIDITY_USE_RAW_ADC = true;
+    static final int TEMP_ADC_VALID_MIN = 10;
+    static final int TEMP_ADC_VALID_MAX = 1022;
+
+    // Local dashboard (browser). Set HTTP_PORT=0 to disable.
+    static final int HTTP_PORT = parsePortOrDefault(System.getenv("HTTP_PORT"), 8080);
+
+    // Phone alert when heating starts: install ntfy app, pick a secret topic, then:
+    // export NTFY_TOPIC=your-secret-topic
 
     // Moisture thresholds (tune after you read real ADC values)
     // Your readings: ~729 dry air, ~735 dry wood, ~550 in water => WET is LOWER.
@@ -125,8 +137,71 @@ public class HeatingDrivewayFirmata {
         return v * 100.0f; // LM35 fallback
     }
 
-    private static boolean tempIsValid(float tempC) {
+    private static int parsePortOrDefault(String env, int defaultPort) {
+        if (env == null || env.isBlank()) {
+            return defaultPort;
+        }
+        try {
+            int p = Integer.parseInt(env.trim());
+            return p >= 0 && p <= 65535 ? p : defaultPort;
+        } catch (NumberFormatException e) {
+            return defaultPort;
+        }
+    }
+
+    private static boolean tempIsValid(float tempC, int tempAdc) {
+        if (TEMP_VALIDITY_USE_RAW_ADC && tempAdc >= 0) {
+            return tempAdc >= TEMP_ADC_VALID_MIN && tempAdc <= TEMP_ADC_VALID_MAX;
+        }
         return tempC >= TEMP_MIN_VALID_C && tempC <= TEMP_MAX_VALID_C;
+    }
+
+    private static String jsonEscape(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String buildStatusJson(
+            State state,
+            int moistureA0,
+            int moistureA1,
+            int tempAdc,
+            float tempC,
+            boolean relayOn
+    ) {
+        return String.format(
+                Locale.ROOT,
+                "{\"state\":\"%s\",\"relayOn\":%s,\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempC\":%.2f,\"ts\":%d}",
+                jsonEscape(state.name()),
+                relayOn ? "true" : "false",
+                moistureA0,
+                moistureA1,
+                tempAdc,
+                tempC,
+                System.currentTimeMillis()
+        );
+    }
+
+    /** Shown before Firmata connects, or after a fatal serial error (keeps HTTP up for debugging). */
+    private static String buildBootStatusJson(String stateLabel, String note) {
+        return String.format(
+                Locale.ROOT,
+                "{\"state\":\"%s\",\"relayOn\":false,\"moistureA0\":-1,\"moistureA1\":-1,\"tempAdc\":-1,\"tempC\":0,\"ts\":%d,\"note\":\"%s\"}",
+                jsonEscape(stateLabel),
+                System.currentTimeMillis(),
+                jsonEscape(note != null ? note : "")
+        );
+    }
+
+    private static String buildErrorStatusJson(String message) {
+        return String.format(
+                Locale.ROOT,
+                "{\"state\":\"ERROR\",\"relayOn\":false,\"moistureA0\":-1,\"moistureA1\":-1,\"tempAdc\":-1,\"tempC\":0,\"ts\":%d,\"error\":\"%s\"}",
+                System.currentTimeMillis(),
+                jsonEscape(message != null ? message : "unknown")
+        );
     }
 
     private static void relaySet(Pin relayPin, boolean turnOn) {
@@ -141,29 +216,63 @@ public class HeatingDrivewayFirmata {
 
     public static void main(String[] args) throws IOException, InterruptedException {
         // Update this for your system/port.
-        String port = "/dev/cu.usbserial-0001";
+        String serialPort = "/dev/cu.usbserial-0001";
 
-        IODevice arduino = new FirmataDevice(port);
-        arduino.start();
-        System.out.println("Board starting...");
-        arduino.ensureInitializationIsDone();
+        // Start the web dashboard *before* Firmata so localhost:8080 works even if USB/serial fails.
+        DrivewayHttpServer http = null;
+        if (HTTP_PORT > 0) {
+            try {
+                http = new DrivewayHttpServer(HTTP_PORT);
+                http.setStatusJson(buildBootStatusJson("CONNECTING", "Starting; opening " + serialPort + " …"));
+                http.start();
+                System.out.println("Dashboard: http://127.0.0.1:" + HTTP_PORT + "/");
+                System.out.println("         Open that URL now — page loads even while Arduino connects.");
+            } catch (IOException e) {
+                System.err.println("Could not start dashboard on port " + HTTP_PORT + ": " + e.getMessage());
+                System.err.println("Try: export HTTP_PORT=8081  (or free the port)");
+            }
+        }
 
-        Pin moisturePinA0 = arduino.getPin(Pins.A0);
-        Pin moisturePinA1 = arduino.getPin(Pins.A1);
-        Pin tempPin = arduino.getPin(Pins.A2);
-        Pin relayPin = arduino.getPin(Pins.D7);
+        IODevice arduino;
+        Pin moisturePinA0;
+        Pin moisturePinA1;
+        Pin tempPin;
+        Pin relayPin;
+        Cache cache;
+        try {
+            arduino = new FirmataDevice(serialPort);
+            arduino.start();
+            System.out.println("Board starting...");
+            arduino.ensureInitializationIsDone();
 
-        moisturePinA0.setMode(Pin.Mode.ANALOG);
-        moisturePinA1.setMode(Pin.Mode.ANALOG);
-        tempPin.setMode(Pin.Mode.ANALOG);
-        relayPin.setMode(Pin.Mode.OUTPUT);
+            moisturePinA0 = arduino.getPin(Pins.A0);
+            moisturePinA1 = arduino.getPin(Pins.A1);
+            tempPin = arduino.getPin(Pins.A2);
+            relayPin = arduino.getPin(Pins.D7);
 
-        Cache cache = new Cache();
-        AnalogCacheListener listener = new AnalogCacheListener(moisturePinA0, moisturePinA1, tempPin, cache);
-        arduino.addEventListener(listener);
+            moisturePinA0.setMode(Pin.Mode.ANALOG);
+            moisturePinA1.setMode(Pin.Mode.ANALOG);
+            tempPin.setMode(Pin.Mode.ANALOG);
+            relayPin.setMode(Pin.Mode.OUTPUT);
 
-        // Fail-safe: relay OFF at startup.
-        relaySet(relayPin, false);
+            cache = new Cache();
+            AnalogCacheListener listener = new AnalogCacheListener(moisturePinA0, moisturePinA1, tempPin, cache);
+            arduino.addEventListener(listener);
+
+            relaySet(relayPin, false);
+        } catch (Exception e) {
+            System.err.println("Arduino / Firmata failed (fix USB, port, StandardFirmata, or free the serial port):");
+            e.printStackTrace();
+            if (http != null) {
+                http.setStatusJson(buildErrorStatusJson(e.getMessage()));
+            }
+            while (!Thread.currentThread().isInterrupted()) {
+                Thread.sleep(1000);
+            }
+            return;
+        }
+
+        String ntfyTopic = System.getenv("NTFY_TOPIC");
 
         State state = State.IDLE;
         long conditionBeganAtMs = 0;
@@ -190,7 +299,7 @@ public class HeatingDrivewayFirmata {
                 boolean moistureValid = moistureAdcA0 >= 0;
                 boolean moistureLikelySaturated = moistureAdcA0 >= 1020 && moistureAdcA1 >= 1020;
                 int moistureAdc = moistureValid ? moistureAdcA0 : 0;
-                boolean tempOk = tempIsValid(tempC);
+                boolean tempOk = tempIsValid(tempC, tempAdc);
 
                 boolean wet = moistureValid && !moistureLikelySaturated && moistureIsWet(moistureAdc);
                 boolean dry = moistureValid && !moistureLikelySaturated && moistureIsDry(moistureAdc);
@@ -203,6 +312,7 @@ public class HeatingDrivewayFirmata {
                     System.out.println("FAULT: temperature out of valid range -> relay OFF");
                 }
 
+                boolean enteredHeating = false;
                 switch (state) {
                     case IDLE: {
                         relaySet(relayPin, false);
@@ -225,6 +335,7 @@ public class HeatingDrivewayFirmata {
                             state = State.HEATING_ON;
                             heatingStartedAtMs = nowMs;
                             relaySet(relayPin, true);
+                            enteredHeating = true;
                             System.out.println("Snow confirmed -> HEATING_ON");
                         }
                         break;
@@ -277,9 +388,25 @@ public class HeatingDrivewayFirmata {
                     System.out.println(
                             "WARNING: moisture ADC saturated (~1023). Check SIG/GND wiring and that you're using the analog output version of the moisture sensor.");
                 }
+
+                if (enteredHeating) {
+                    NtfyClient.sendIfConfigured(
+                            ntfyTopic,
+                            "Driveway heating ON",
+                            "Relay energized (snow condition confirmed)."
+                    );
+                }
+
+                boolean relayOnForUi = state == State.HEATING_ON;
+                if (http != null) {
+                    http.setStatusJson(buildStatusJson(state, moistureAdcA0, moistureAdcA1, tempAdc, tempC, relayOnForUi));
+                }
             }
         } finally {
             try {
+                if (http != null) {
+                    http.stop();
+                }
                 relaySet(relayPin, false);
                 arduino.stop();
             } catch (Exception e) {

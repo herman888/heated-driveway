@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Heated Driveway — Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #0c0e12;
+      --bg1: #12161c;
+      --surface: rgba(255, 255, 255, 0.04);
+      --surface2: rgba(255, 255, 255, 0.07);
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #e8eaef;
+      --muted: #8b929e;
+      --accent: #5b9fd4;
+      --heat: #e8a23a;
+      --heat-glow: rgba(232, 162, 58, 0.25);
+      --ok: #6bcb8f;
+      --warn: #e85d5d;
+      --radius: 14px;
+      --shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      font-size: 15px;
+      color: var(--text);
+      background: var(--bg0);
+      background-image:
+        radial-gradient(ellipse 120% 80% at 50% -20%, rgba(91, 159, 212, 0.18), transparent 50%),
+        radial-gradient(ellipse 80% 50% at 100% 100%, rgba(232, 162, 58, 0.06), transparent 45%),
+        linear-gradient(180deg, var(--bg1) 0%, var(--bg0) 100%);
+      background-attachment: fixed;
+    }
+
+    .shell { max-width: 920px; margin: 0 auto; padding: 0 1.25rem 3rem; }
+
+    /* Nav */
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.25rem 0 1.75rem;
+      border-bottom: 1px solid var(--border);
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+    .brand-mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), #3d7aa8);
+      display: grid;
+      place-items: center;
+      font-size: 1.15rem;
+      box-shadow: 0 8px 24px rgba(91, 159, 212, 0.35);
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand span {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-top: 0.1rem;
+    }
+    .nav-meta {
+      text-align: right;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .nav-meta strong { color: var(--text); font-weight: 600; }
+    .pulse-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      margin-right: 6px;
+      vertical-align: middle;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .pulse-dot.off { background: var(--muted); animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    /* Hero status */
+    .hero {
+      margin-top: 2rem;
+      padding: 1.75rem 1.5rem;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+    .hero-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 1rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .status-pill.idle { background: rgba(107, 203, 143, 0.15); color: var(--ok); border: 1px solid rgba(107, 203, 143, 0.35); }
+    .status-pill.heating {
+      background: var(--heat-glow);
+      color: var(--heat);
+      border: 1px solid rgba(232, 162, 58, 0.5);
+      box-shadow: 0 0 32px var(--heat-glow);
+    }
+    .status-pill.fault { background: rgba(232, 93, 93, 0.15); color: var(--warn); border: 1px solid rgba(232, 93, 93, 0.4); }
+    .status-pill.connecting { background: rgba(91, 159, 212, 0.15); color: var(--accent); border: 1px solid rgba(91, 159, 212, 0.35); }
+
+    .hero h2 {
+      margin: 0.75rem 0 0.35rem;
+      font-size: 1.65rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+    }
+    .hero-desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      max-width: 36rem;
+      line-height: 1.5;
+    }
+    .relay-badge {
+      margin-top: 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.85rem;
+      border-radius: 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.8rem;
+    }
+    .relay-badge.on { border-color: rgba(232, 162, 58, 0.45); color: var(--heat); }
+
+    /* Metrics grid */
+    .section-title {
+      margin: 2.5rem 0 1rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .metric {
+      padding: 1.25rem 1.35rem;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .metric:hover { border-color: rgba(255, 255, 255, 0.12); transform: translateY(-1px); }
+    .metric-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 0.65rem;
+    }
+    .metric-label { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+    .metric-value {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 1.35rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .metric-unit { font-size: 0.75rem; color: var(--muted); font-weight: 500; margin-left: 0.15rem; }
+    .bar {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      margin-top: 0.5rem;
+    }
+    .bar > span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--accent), #7eb8e0);
+      transition: width 0.4s ease;
+    }
+    .bar.warn > span { background: linear-gradient(90deg, #c9a227, var(--heat)); }
+
+    /* Technical */
+    details.tech {
+      margin-top: 2rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      overflow: hidden;
+    }
+    details.tech summary {
+      padding: 0.9rem 1.25rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--muted);
+      list-style: none;
+      user-select: none;
+    }
+    details.tech summary::-webkit-details-marker { display: none; }
+    details.tech summary::after { content: "▸"; float: right; transition: transform 0.2s; }
+    details.tech[open] summary::after { transform: rotate(90deg); }
+    details.tech pre {
+      margin: 0;
+      padding: 0 1.25rem 1.25rem;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      line-height: 1.5;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    .error-banner {
+      margin-top: 1rem;
+      padding: 1rem 1.25rem;
+      border-radius: 10px;
+      background: rgba(232, 93, 93, 0.12);
+      border: 1px solid rgba(232, 93, 93, 0.35);
+      color: #f0a8a8;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="nav">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">❄</div>
+        <div>
+          <h1>Heated Driveway</h1>
+          <span>EECS 1021 · Live monitor</span>
+        </div>
+      </div>
+      <div class="nav-meta">
+        <span id="liveDot" class="pulse-dot"></span><span id="lastSync">Connecting…</span>
+      </div>
+    </header>
+
+    <section class="hero" id="hero">
+      <div class="hero-top">
+        <span class="status-pill connecting" id="pill">…</span>
+      </div>
+      <h2 id="headline">Loading status</h2>
+      <p class="hero-desc" id="subline">Pulling data from your Firmata app. Make sure <code style="background:var(--surface2);padding:0.15rem 0.4rem;border-radius:4px;font-size:0.85em;">HeatingDrivewayFirmata</code> is running.</p>
+      <div class="relay-badge" id="relayLine">Relay: —</div>
+      <div id="errorBox" class="error-banner" style="display:none;"></div>
+    </section>
+
+    <h3 class="section-title">Sensors</h3>
+    <div class="grid">
+      <article class="metric">
+        <div class="metric-head">
+          <span class="metric-label">Moisture A0</span>
+          <span><span class="metric-value" id="m0v">—</span><span class="metric-unit">ADC</span></span>
+        </div>
+        <div class="bar" id="m0b"><span id="m0i" style="width:0%"></span></div>
+      </article>
+      <article class="metric">
+        <div class="metric-head">
+          <span class="metric-label">Moisture A1</span>
+          <span><span class="metric-value" id="m1v">—</span><span class="metric-unit">ADC</span></span>
+        </div>
+        <div class="bar" id="m1b"><span id="m1i" style="width:0%"></span></div>
+      </article>
+      <article class="metric">
+        <div class="metric-head">
+          <span class="metric-label">Temperature</span>
+          <span><span class="metric-value" id="tv">—</span><span class="metric-unit" id="tunit">°C</span></span>
+        </div>
+        <p class="hero-desc" style="margin:0;font-size:0.8rem;">Raw ADC <span id="tadc" style="font-family:JetBrains Mono,sans-serif;color:var(--text)">—</span></p>
+        <div class="bar warn" style="margin-top:0.65rem;"><span id="ti" style="width:0%"></span></div>
+      </article>
+    </div>
+
+    <details class="tech">
+      <summary>Technical payload (JSON)</summary>
+      <pre id="raw">{}</pre>
+    </details>
+
+    <footer>
+      <p>Updates every <strong>2 seconds</strong> from the Java dashboard server. Open this page at
+        <a id="footUrl" href="#">127.0.0.1</a> after starting the app — do not open the HTML file directly from disk.</p>
+    </footer>
+  </div>
+
+  <script>
+    function apiBase() {
+      if (location.protocol === 'http:' || location.protocol === 'https:') {
+        return location.origin;
+      }
+      var q = new URLSearchParams(location.search || '');
+      var port = q.get('port') || '8080';
+      return 'http://127.0.0.1:' + port;
+    }
+    var base = apiBase();
+    document.getElementById('footUrl').href = base + '/';
+    document.getElementById('footUrl').textContent = base + '/';
+
+    function pct(n, max) {
+      if (n == null || n < 0 || !isFinite(n)) return 0;
+      return Math.min(100, Math.round((n / max) * 100));
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return '—';
+      try {
+        return new Date(ts).toLocaleString(undefined, {
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+          month: 'short', day: 'numeric'
+        });
+      } catch (e) { return '—'; }
+    }
+
+    async function poll() {
+      var url = base + '/api/status';
+      var dot = document.getElementById('liveDot');
+      var errBox = document.getElementById('errorBox');
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        dot.classList.remove('off');
+
+        const heat = j.relayOn || j.state === 'HEATING_ON';
+        let pillClass = 'idle';
+        let pillText = j.state || '—';
+        let headline = 'System idle';
+        let sub = 'Waiting for wet + near-freezing conditions before heating.';
+
+        if (j.state === 'HEATING_ON' || heat) {
+          pillClass = 'heating';
+          pillText = 'Heating';
+          headline = 'Driveway heat is on';
+          sub = 'Relay is energized. Pad is receiving power per your wiring.';
+        } else if (j.state === 'CONFIRMING_SNOW') {
+          pillClass = 'connecting';
+          pillText = 'Confirming';
+          headline = 'Checking conditions';
+          sub = 'Wet + cold signal must hold before heat turns on.';
+        } else if (j.state === 'COOLDOWN') {
+          pillClass = 'idle';
+          pillText = 'Cooldown';
+          headline = 'Cooling down';
+          sub = 'Heating paused after a run; timers will allow another cycle later.';
+        } else if (j.state === 'FAULT') {
+          pillClass = 'fault';
+          pillText = 'Fault';
+          headline = 'Safety hold';
+          sub = 'Sensors out of expected range — relay forced off.';
+        } else if (j.state === 'CONNECTING') {
+          pillClass = 'connecting';
+          pillText = 'Connecting';
+          headline = 'Linking to Arduino';
+          sub = j.note || 'Opening serial / Firmata…';
+        } else if (j.state === 'ERROR') {
+          pillClass = 'fault';
+          pillText = 'Error';
+          headline = 'Could not connect';
+          sub = j.error || 'Check USB, port, and StandardFirmata.';
+        } else if (j.state === 'IDLE') {
+          pillClass = 'idle';
+          pillText = 'Idle';
+          headline = 'All clear';
+          sub = 'No active heating. Monitoring moisture and temperature.';
+        }
+
+        var pill = document.getElementById('pill');
+        pill.className = 'status-pill ' + pillClass;
+        pill.textContent = pillText;
+        document.getElementById('headline').textContent = headline;
+        document.getElementById('subline').textContent = sub;
+
+        var relayEl = document.getElementById('relayLine');
+        relayEl.textContent = heat ? 'Relay: ON (load powered)' : 'Relay: OFF';
+        relayEl.className = 'relay-badge' + (heat ? ' on' : '');
+
+        if (j.state === 'ERROR' && j.error) {
+          errBox.style.display = 'block';
+          errBox.textContent = j.error;
+        } else {
+          errBox.style.display = 'none';
+        }
+
+        document.getElementById('lastSync').innerHTML = 'Live · <strong>' + fmtTime(j.ts) + '</strong>';
+
+        document.getElementById('m0v').textContent = j.moistureA0 >= 0 ? j.moistureA0 : '—';
+        document.getElementById('m1v').textContent = j.moistureA1 >= 0 ? j.moistureA1 : '—';
+        document.getElementById('m0i').style.width = pct(j.moistureA0, 1023) + '%';
+        document.getElementById('m1i').style.width = pct(j.moistureA1, 1023) + '%';
+
+        document.getElementById('tv').textContent = j.tempAdc >= 0 && j.tempC != null ? Number(j.tempC).toFixed(1) : '—';
+        document.getElementById('tadc').textContent = j.tempAdc >= 0 ? j.tempAdc : '—';
+        document.getElementById('ti').style.width = pct(j.tempAdc, 1023) + '%';
+
+        document.getElementById('raw').textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        dot.classList.add('off');
+        document.getElementById('pill').className = 'status-pill fault';
+        document.getElementById('pill').textContent = 'Offline';
+        document.getElementById('headline').textContent = 'Dashboard unreachable';
+        document.getElementById('subline').textContent =
+          'Start HeatingDrivewayFirmata in IntelliJ, then open ' + base + '/ in the browser.';
+        document.getElementById('relayLine').textContent = 'Relay: unknown';
+        document.getElementById('relayLine').className = 'relay-badge';
+        errBox.style.display = 'block';
+        errBox.textContent = String(e) + ' · tried ' + url;
+        document.getElementById('lastSync').textContent = 'Offline';
+        document.getElementById('raw').textContent = e + '\n\n' + document.getElementById('raw').textContent;
+      }
+    }
+    poll();
+    setInterval(poll, 2000);
+  </script>
+</body>
+</html>
