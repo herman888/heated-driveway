@@ -39,7 +39,7 @@ function buildSystemPrompt(ctx: {
     awaitingHeatConfirm: ctx.awaitingConfirmation,
   };
 
-  return `You help a homeowner with a heated driveway (Arduino + relay, web dashboard).
+  return `You help a homeowner using the BAM Heating dashboard for a heated driveway (Arduino + relay, web UI).
 Current context JSON:
 ${JSON.stringify(payload, null, 2)}
 

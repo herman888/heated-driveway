@@ -1,6 +1,23 @@
 * {
   box-sizing: border-box;
 }
+
+:root {
+  --bg-base: #e8edf5;
+  --bg-shell: #f1f5fb;
+  --ion: #0e7490;
+  --ion-soft: #0891b2;
+  --heat: #ea580c;
+  --heat-soft: #fed7aa;
+  --heat-glow: rgba(234, 88, 12, 0.22);
+  --accent: #4f46e5;
+  --text: #0f172a;
+  --text-muted: #475569;
+  --glass: rgba(255, 255, 255, 0.82);
+  --font-display: "Syne", system-ui, sans-serif;
+  --font-ui: "DM Sans", system-ui, -apple-system, sans-serif;
+}
+
 html,
 body,
 #root {
@@ -8,8 +25,10 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background: #242b34;
-  font-family: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  background: var(--bg-base);
+  font-family: var(--font-ui);
   font-size: 16px;
-  color: #e6e9ef;
+  font-optical-sizing: auto;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }

@@ -11,15 +11,18 @@ export function HeatConfirmModal({ open, onConfirm, onCancel }: Props) {
       <button type="button" className="modal-backdrop" aria-label="Dismiss" onClick={onCancel} />
       <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="heat-confirm-title">
         <h2 id="heat-confirm-title" className="modal-title">
-          Heat up the driveway?
+          Turn on BAM Heating?
         </h2>
-        <p className="modal-body">This turns the heater pad relay on (manual ON). You can also say “yes” or “no” into the mic.</p>
+        <p className="modal-body">
+          Confirms manual override — pad relay pulls in. You can also answer by voice with <strong>yes</strong> or{" "}
+          <strong>no</strong>.
+        </p>
         <div className="modal-actions">
           <button type="button" className="btn btn-primary modal-btn" onClick={onConfirm}>
-            Yes, heat it
+            Confirm energize
           </button>
           <button type="button" className="btn modal-btn" onClick={onCancel}>
-            Cancel
+            Abort
           </button>
         </div>
       </div>

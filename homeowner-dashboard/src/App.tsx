@@ -180,151 +180,163 @@ export default function App() {
     : "Voice";
 
   return (
-    <div className="layout">
-      <header className="util-bar">
-        <div className="brand-block">
-          <h1 className="brand-name">
-            Thaw<span>Lane</span>
-          </h1>
-          <p className="brand-tag">Heated driveway — live pad status, relay control, and weather (North York).</p>
-        </div>
-        <div className="weather-box">
-          <div className="wb-label">Outdoor</div>
-          {weatherErr ? (
-            <div className="wb-value wb-muted">Unavailable</div>
-          ) : outdoor != null ? (
-            <>
-              <div className="wb-value">{outdoor.toFixed(1)} °C</div>
-              <div className="wb-meta">
-                Wind {weather?.windKmh?.toFixed(0) ?? "—"} km/h
-                {weather?.isSnowy ? " · Snow code" : ""}
-              </div>
-            </>
-          ) : (
-            <div className="wb-value wb-muted">…</div>
-          )}
-        </div>
-      </header>
+    <div className="app-shell">
+      <div className="layout">
+        <header className="util-bar">
+          <div className="brand-block">
+            <div className="brand-mark" aria-hidden>
+              B
+            </div>
+            <div className="brand-text">
+              <h1 className="brand-name">
+                BAM <span>Heating</span>
+              </h1>
+              <p className="brand-tag">Heated driveway console · live relay, sensors, and North York weather.</p>
+            </div>
+          </div>
+          <div className="weather-box">
+            <div className="wb-label">Outside</div>
+            {weatherErr ? (
+              <div className="wb-value wb-muted">No data</div>
+            ) : outdoor != null ? (
+              <>
+                <div className="wb-value">{outdoor.toFixed(1)}°</div>
+                <div className="wb-meta">
+                  Wind {weather?.windKmh?.toFixed(0) ?? "—"} km/h
+                  {weather?.isSnowy ? " · precip code" : ""}
+                </div>
+              </>
+            ) : (
+              <div className="wb-value wb-muted">…sync</div>
+            )}
+          </div>
+        </header>
 
-      <div className="scene-wrap">
-        <DrivewayCanvas snowBoost={Math.min(1.2, snowBoost)} heatingOn={heatingOn} />
+        <div className="scene-wrap">
+          <div className="scene-frame">
+            <div className="scene-inner">
+              <DrivewayCanvas snowBoost={Math.min(1.2, snowBoost)} heatingOn={heatingOn} />
+            </div>
+            <p className="scene-hint">Orbit · scroll zoom</p>
+          </div>
+        </div>
+
+        <HeatConfirmModal open={pendingHeatConfirm} onConfirm={confirmHeatFromModal} onCancel={cancelHeatModal} />
+
+        {(assistToast || speech.lastError) && (
+          <div className="toast" role="status">
+            {speech.lastError && assistToast
+              ? `Mic: ${speech.lastError} · ${assistToast}`
+              : speech.lastError
+              ? `Mic: ${speech.lastError}`
+              : assistToast}
+            <button
+              type="button"
+              className="toast-close"
+              aria-label="Dismiss"
+              onClick={() => {
+                setAssistToast(null);
+                speech.clearLastError();
+                stopSpeech();
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <footer className="control-dock" aria-label="Driveway controls">
+          <div className="dock-row">
+            <div className="dock-panel">
+              <div className="panel-top">
+                <h2 className="panel-title">Pad control</h2>
+                <span className={heatingOn ? "status-pill status-pill--heat" : "status-pill"}>
+                  {heatingOn ? "Thermal on" : "Thermal off"}
+                </span>
+              </div>
+              <p className="panel-sub">
+                {relayMode === "on"
+                  ? "Hard override → manual energize"
+                  : relayMode === "off"
+                  ? "Hard override → manual de-energize"
+                  : "Firmware state machine → auto"}
+              </p>
+              <div className="btn-toolbar" role="group" aria-label="Relay mode">
+                <button type="button" className="btn btn-primary" disabled={relayBusy} onClick={() => void sendRelay("on")}>
+                  Energize
+                </button>
+                <button type="button" className="btn btn-danger" disabled={relayBusy} onClick={() => void sendRelay("off")}>
+                  Cut
+                </button>
+                <button type="button" className="btn btn-secondary" disabled={relayBusy} onClick={() => void sendRelay("auto")}>
+                  Auto
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-voice ${speech.listening ? "btn-voice-live" : ""}`}
+                  disabled={relayBusy || voiceBusy || !speech.supported}
+                  onClick={onVoiceClick}
+                  title={
+                    !groqConfigured
+                      ? "Add VITE_GROQ_API_KEY in .env.local for AI; mic still works to show setup hints."
+                      : "Speak: e.g. heat the driveway, or ask about sensors"
+                  }
+                >
+                  {voiceLabel}
+                </button>
+              </div>
+              {!groqConfigured ? (
+                <p className="dock-hint">
+                  Voice stack needs <code>VITE_GROQ_API_KEY</code> in <code>.env.local</code>.
+                </p>
+              ) : !ttsConfigured ? (
+                <p className="dock-hint">
+                  Optional speech-out: <code>VITE_ELEVENLABS_API_KEY</code>
+                </p>
+              ) : null}
+            </div>
+
+            <div className="dock-panel dock-panel--metrics">
+              <div className="panel-top">
+                <h2 className="panel-title">Telemetry</h2>
+              </div>
+              {relayErr ? <div className="alert inline">{relayErr}</div> : null}
+              {fetchError ? <div className="alert inline">{fetchError}</div> : null}
+              {status ? (
+                <div className="sensor-tiles">
+                  <div className="sensor-tile">
+                    <span className="tile-label">Temp · A2</span>
+                    <span className="tile-value">{sensorOk ? `${sensorC.toFixed(1)} °C` : "—"}</span>
+                  </div>
+                  <div className="sensor-tile">
+                    <span className="tile-label">Moisture · A0 / A1</span>
+                    <span className="tile-value tab-nums">
+                      {status.moistureA0 >= 0 ? status.moistureA0 : "—"}
+                      <span className="tile-sep">/</span>
+                      {status.moistureA1 >= 0 ? status.moistureA1 : "—"}
+                    </span>
+                  </div>
+                  <div className="sensor-tile sensor-tile--wide">
+                    <span className="tile-label">Temp ADC · raw → smooth</span>
+                    <span className="tile-value tab-nums">
+                      {status.tempAdcRaw != null && status.tempAdcRaw >= 0 ? status.tempAdcRaw : "—"}
+                      <span className="tile-arrow">→</span>
+                      {status.tempAdc >= 0 ? status.tempAdc : "—"}
+                    </span>
+                  </div>
+                  <div className="sensor-tile sensor-tile--wide">
+                    <span className="tile-label">Last frame</span>
+                    <span className="tile-value tile-value--muted">{fmtTime(status.ts)}</span>
+                  </div>
+                </div>
+              ) : !fetchError ? (
+                <p className="panel-wait">Handshake with controller…</p>
+              ) : null}
+            </div>
+          </div>
+          <p className="dock-orbit">Preview scene below · illustrative only</p>
+        </footer>
       </div>
-
-      <HeatConfirmModal open={pendingHeatConfirm} onConfirm={confirmHeatFromModal} onCancel={cancelHeatModal} />
-
-      {(assistToast || speech.lastError) && (
-        <div className="toast" role="status">
-          {speech.lastError && assistToast
-            ? `Mic: ${speech.lastError} · ${assistToast}`
-            : speech.lastError
-            ? `Mic: ${speech.lastError}`
-            : assistToast}
-          <button
-            type="button"
-            className="toast-close"
-            aria-label="Dismiss"
-            onClick={() => {
-              setAssistToast(null);
-              speech.clearLastError();
-              stopSpeech();
-            }}
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      <footer className="control-dock" aria-label="Driveway controls">
-        <div className="dock-row">
-          <div className="dock-panel">
-            <div className="panel-top">
-              <h2 className="panel-title">Heater pad</h2>
-              <span className={heatingOn ? "status-pill status-pill--heat" : "status-pill"}>
-                {heatingOn ? "Heat on" : "Heat off"}
-              </span>
-            </div>
-            <p className="panel-sub">
-              {relayMode === "on"
-                ? "You are overriding: manual on"
-                : relayMode === "off"
-                ? "You are overriding: manual off"
-                : "Controller logic: automatic"}
-            </p>
-            <div className="btn-toolbar" role="group" aria-label="Relay mode">
-              <button type="button" className="btn btn-primary" disabled={relayBusy} onClick={() => void sendRelay("on")}>
-                Turn on
-              </button>
-              <button type="button" className="btn btn-danger" disabled={relayBusy} onClick={() => void sendRelay("off")}>
-                Turn off
-              </button>
-              <button type="button" className="btn btn-secondary" disabled={relayBusy} onClick={() => void sendRelay("auto")}>
-                Auto
-              </button>
-              <button
-                type="button"
-                className={`btn btn-voice ${speech.listening ? "btn-voice-live" : ""}`}
-                disabled={relayBusy || voiceBusy || !speech.supported}
-                onClick={onVoiceClick}
-                title={
-                  !groqConfigured
-                    ? "Add VITE_GROQ_API_KEY in .env.local for AI; mic still works to show setup hints."
-                    : "Speak: e.g. heat the driveway, or ask about sensors"
-                }
-              >
-                {voiceLabel}
-              </button>
-            </div>
-            {!groqConfigured ? (
-              <p className="dock-hint">
-                Voice needs a Groq key — add to <code>.env.local</code> (see <code>.env.example</code>).
-              </p>
-            ) : !ttsConfigured ? (
-              <p className="dock-hint">
-                Optional: <code>VITE_ELEVENLABS_API_KEY</code> in <code>.env.local</code> for spoken replies.
-              </p>
-            ) : null}
-          </div>
-
-          <div className="dock-panel dock-panel--metrics">
-            <div className="panel-top">
-              <h2 className="panel-title">Live readings</h2>
-            </div>
-            {relayErr ? <div className="alert inline">{relayErr}</div> : null}
-            {fetchError ? <div className="alert inline">{fetchError}</div> : null}
-            {status ? (
-              <div className="sensor-tiles">
-                <div className="sensor-tile">
-                  <span className="tile-label">Temperature (A2)</span>
-                  <span className="tile-value">{sensorOk ? `${sensorC.toFixed(1)} °C` : "—"}</span>
-                </div>
-                <div className="sensor-tile">
-                  <span className="tile-label">Moisture A0 · A1</span>
-                  <span className="tile-value tab-nums">
-                    {status.moistureA0 >= 0 ? status.moistureA0 : "—"}
-                    <span className="tile-sep">·</span>
-                    {status.moistureA1 >= 0 ? status.moistureA1 : "—"}
-                  </span>
-                </div>
-                <div className="sensor-tile sensor-tile--wide">
-                  <span className="tile-label">Temp ADC (raw → smoothed)</span>
-                  <span className="tile-value tab-nums">
-                    {status.tempAdcRaw != null && status.tempAdcRaw >= 0 ? status.tempAdcRaw : "—"}
-                    <span className="tile-arrow">→</span>
-                    {status.tempAdc >= 0 ? status.tempAdc : "—"}
-                  </span>
-                </div>
-                <div className="sensor-tile sensor-tile--wide">
-                  <span className="tile-label">Last sample</span>
-                  <span className="tile-value tile-value--muted">{fmtTime(status.ts)}</span>
-                </div>
-              </div>
-            ) : !fetchError ? (
-              <p className="panel-wait">Waiting for controller…</p>
-            ) : null}
-          </div>
-        </div>
-        <p className="dock-orbit">3D view — drag to orbit, scroll to zoom</p>
-      </footer>
     </div>
   );
 }
