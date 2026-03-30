@@ -3,32 +3,37 @@
 }
 
 :root {
-  --bg-base: #e8edf5;
-  --bg-shell: #f1f5fb;
-  --ion: #0e7490;
-  --ion-soft: #0891b2;
-  --heat: #ea580c;
-  --heat-soft: #fed7aa;
-  --heat-glow: rgba(234, 88, 12, 0.22);
-  --accent: #4f46e5;
-  --text: #0f172a;
-  --text-muted: #475569;
-  --glass: rgba(255, 255, 255, 0.82);
+  --bg-base: #05070d;
+  --bg-shell: #090d16;
+  --ion: #38bdf8;
+  --ion-soft: #0ea5e9;
+  --heat: #f97316;
+  --heat-soft: #fdba74;
+  --heat-glow: rgba(249, 115, 22, 0.3);
+  --accent: #818cf8;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --glass: rgba(8, 12, 20, 0.78);
   --font-display: "Syne", system-ui, sans-serif;
   --font-ui: "DM Sans", system-ui, -apple-system, sans-serif;
 }
 
 html,
-body,
-#root {
+body {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
   width: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--bg-base);
   font-family: var(--font-ui);
   font-size: 16px;
   font-optical-sizing: auto;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100%;
+  width: 100%;
 }
