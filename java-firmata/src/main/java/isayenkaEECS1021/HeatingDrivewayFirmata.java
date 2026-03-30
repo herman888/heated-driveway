@@ -107,6 +107,44 @@ public class HeatingDrivewayFirmata {
         FAULT
     }
 
+    /** HTTP/dashboard override: {@link #AUTO} lets the snow state machine drive D7; otherwise pin is forced. */
+    enum RelayDriveMode {
+        AUTO,
+        FORCE_ON,
+        FORCE_OFF
+    }
+
+    private static volatile RelayDriveMode relayDriveMode = RelayDriveMode.AUTO;
+
+    /** Called from {@link DrivewayHttpServer} {@code POST /api/relay} body {@code {"mode":"on"|"off"|"auto"}}. */
+    public static void applyRelayDriveCommand(String mode) {
+        if (mode == null) {
+            return;
+        }
+        switch (mode.trim().toLowerCase(Locale.ROOT)) {
+            case "on":
+                relayDriveMode = RelayDriveMode.FORCE_ON;
+                System.out.println("Relay override: FORCE ON (dashboard / API)");
+                break;
+            case "off":
+                relayDriveMode = RelayDriveMode.FORCE_OFF;
+                System.out.println("Relay override: FORCE OFF (dashboard / API)");
+                break;
+            case "auto":
+                relayDriveMode = RelayDriveMode.AUTO;
+                System.out.println("Relay override: AUTO (state machine)");
+                break;
+            default:
+                break;
+        }
+    }
+
+    private static String relayModeJsonToken() {
+        return relayDriveMode == RelayDriveMode.FORCE_ON
+                ? "on"
+                : relayDriveMode == RelayDriveMode.FORCE_OFF ? "off" : "auto";
+    }
+
     static final class Cache {
         /** Physical Arduino A0 / A1 (JSON {@code moistureA0} / {@code moistureA1}); dashboard matches silkscreen. */
         volatile int moistureAdcA0 = -1;
@@ -220,9 +258,10 @@ public class HeatingDrivewayFirmata {
     ) {
         return String.format(
                 Locale.ROOT,
-                "{\"state\":\"%s\",\"relayOn\":%s,\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempAdcRaw\":%d,\"tempC\":%.2f,\"ts\":%d}",
+                "{\"state\":\"%s\",\"relayOn\":%s,\"relayMode\":\"%s\",\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempAdcRaw\":%d,\"tempC\":%.2f,\"ts\":%d}",
                 jsonEscape(state.name()),
                 relayOn ? "true" : "false",
+                jsonEscape(relayModeJsonToken()),
                 moistureA0,
                 moistureA1,
                 tempAdc,
@@ -236,7 +275,7 @@ public class HeatingDrivewayFirmata {
     private static String buildBootStatusJson(String stateLabel, String note) {
         return String.format(
                 Locale.ROOT,
-                "{\"state\":\"%s\",\"relayOn\":false,\"moistureA0\":-1,\"moistureA1\":-1,\"tempAdc\":-1,\"tempC\":0,\"ts\":%d,\"note\":\"%s\"}",
+                "{\"state\":\"%s\",\"relayOn\":false,\"relayMode\":\"auto\",\"moistureA0\":-1,\"moistureA1\":-1,\"tempAdc\":-1,\"tempC\":0,\"ts\":%d,\"note\":\"%s\"}",
                 jsonEscape(stateLabel),
                 System.currentTimeMillis(),
                 jsonEscape(note != null ? note : "")
@@ -265,7 +304,7 @@ public class HeatingDrivewayFirmata {
     private static String buildErrorStatusJson(String message) {
         return String.format(
                 Locale.ROOT,
-                "{\"state\":\"ERROR\",\"relayOn\":false,\"moistureA0\":-1,\"moistureA1\":-1,\"tempAdc\":-1,\"tempC\":0,\"ts\":%d,\"error\":\"%s\"}",
+                "{\"state\":\"ERROR\",\"relayOn\":false,\"relayMode\":\"auto\",\"moistureA0\":-1,\"moistureA1\":-1,\"tempAdc\":-1,\"tempC\":0,\"ts\":%d,\"error\":\"%s\"}",
                 System.currentTimeMillis(),
                 jsonEscape(message != null ? message : "unknown")
         );
@@ -381,6 +420,9 @@ public class HeatingDrivewayFirmata {
             System.out.println("Set MOISTURE_RAW_DEBUG_MODE = false for normal heating control.");
             try {
                 while (!Thread.currentThread().isInterrupted()) {
+                    if (relayDriveMode != RelayDriveMode.AUTO) {
+                        relaySet(relayPin, relayDriveMode == RelayDriveMode.FORCE_ON);
+                    }
                     int mLogic = (int) pinMoistureForLogic.getValue();
                     int adcA0 = (int) pinAnalogA0.getValue();
                     int adcA1 = (int) pinAnalogA1.getValue();
@@ -402,9 +444,12 @@ public class HeatingDrivewayFirmata {
                             MOISTURE_WET_ADC_THRESHOLD
                     );
                     if (http != null) {
+                        boolean rOn = relayDriveMode == RelayDriveMode.FORCE_ON;
                         http.setStatusJson(String.format(
                                 Locale.ROOT,
-                                "{\"state\":\"MOISTURE_TEST\",\"relayOn\":false,\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempC\":%.2f,\"ts\":%d,\"note\":\"%s\"}",
+                                "{\"state\":\"MOISTURE_TEST\",\"relayOn\":%s,\"relayMode\":\"%s\",\"moistureA0\":%d,\"moistureA1\":%d,\"tempAdc\":%d,\"tempC\":%.2f,\"ts\":%d,\"note\":\"%s\"}",
+                                rOn ? "true" : "false",
+                                jsonEscape(relayModeJsonToken()),
                                 adcA0,
                                 adcA1,
                                 tAdc,
@@ -450,6 +495,9 @@ public class HeatingDrivewayFirmata {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 long nowMs = System.currentTimeMillis();
+                if (relayDriveMode != RelayDriveMode.AUTO) {
+                    relaySet(relayPin, relayDriveMode == RelayDriveMode.FORCE_ON);
+                }
                 if (nowMs - lastPrintAtMs < READ_INTERVAL_MS) {
                     Thread.sleep(50);
                     continue;
@@ -602,7 +650,9 @@ public class HeatingDrivewayFirmata {
                     );
                 }
 
-                boolean relayOnForUi = state == State.HEATING_ON;
+                boolean relayOnForUi = relayDriveMode != RelayDriveMode.AUTO
+                        ? relayDriveMode == RelayDriveMode.FORCE_ON
+                        : (state == State.HEATING_ON);
                 if (http != null) {
                     int rawForJson = tempAdcRaw >= 0 ? tempAdcRaw : -1;
                     http.setStatusJson(buildStatusJson(state, moistureAdcA0, moistureAdcA1, tempAdc, rawForJson, tempC, relayOnForUi));

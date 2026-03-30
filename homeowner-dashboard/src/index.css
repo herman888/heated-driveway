@@ -1,0 +1,15 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: #242b34;
+  font-family: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  color: #e6e9ef;
+}

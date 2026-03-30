@@ -3,3 +3,13 @@
 
 # IntelliJ
 **/.idea/
+
+# Node (React dashboard)
+node_modules/
+**/dist/
+
+# Secrets / local env (Groq key, etc.)
+.env
+.env.local
+**/.env
+**/.env.local
