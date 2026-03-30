@@ -17,8 +17,7 @@ These defaults match common Grove + Arduino lab setups:
 - Temperature sensor analog output -> `A2` (Arduino)
 - Relay `IN` -> `D2` (Arduino)
 
-If your relay board is **active LOW** (common on many opto/relay modules), set `RELAY_ACTIVE_LOW = true`
-(it’s already true by default).
+If **Turn on** runs the heater backwards, flip `RELAY_ACTIVE_LOW`: `true` when the relay energizes on a **LOW** input, `false` on **HIGH** (current sketch default).
 
 ## Thresholds to tune
 Edit these constants in `heatingdriveway.ino` under `// TUNING (ESTIMATED DEFAULTS)`:

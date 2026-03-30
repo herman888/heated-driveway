@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import "./App.css";
+import { speakText, stopSpeech } from "./api/elevenlabs";
 import { interpretUtterance } from "./api/groq";
 import { postRelayMode } from "./api/relay";
 import { DrivewayCanvas } from "./components/DrivewayCanvas";
@@ -47,6 +48,14 @@ export default function App() {
   const sensorOk = typeof sensorC === "number" && sensorC > -900;
 
   const groqConfigured = Boolean(import.meta.env.VITE_GROQ_API_KEY?.trim());
+  const ttsConfigured = Boolean(import.meta.env.VITE_ELEVENLABS_API_KEY?.trim());
+
+  const maybeSpeak = useCallback((msg: string) => {
+    if (!ttsConfigured || !msg.trim()) return;
+    void speakText(msg).catch(() => {
+      /* TTS is optional; failures are silent */
+    });
+  }, [ttsConfigured]);
 
   const sendRelay = useCallback(async (mode: "on" | "off" | "auto") => {
     setRelayErr(null);
@@ -62,7 +71,7 @@ export default function App() {
   }, [refresh]);
 
   const applyVoiceIntent = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<string | null> => {
       const intent = await interpretUtterance(text, {
         status,
         outdoorC: outdoor ?? null,
@@ -74,39 +83,52 @@ export default function App() {
         if (intent.intent === "confirm_yes") {
           setPendingHeatConfirm(false);
           await sendRelay("on");
-          setAssistToast(intent.message || "Heater pad is on.");
-          return;
+          const msg = intent.message || "Heater pad is on.";
+          setAssistToast(msg);
+          return msg;
         }
         if (intent.intent === "confirm_no") {
           setPendingHeatConfirm(false);
-          setAssistToast(intent.message || "Okay — not turning the heater on.");
-          return;
+          const msg = intent.message || "Okay — not turning the heater on.";
+          setAssistToast(msg);
+          return msg;
         }
         if (intent.intent === "heat_off") {
           setPendingHeatConfirm(false);
           await sendRelay("off");
-          setAssistToast(intent.message || "Heater off.");
-          return;
+          const msg = intent.message || "Heater off.";
+          setAssistToast(msg);
+          return msg;
         }
-        setAssistToast(intent.message);
-        return;
+        const msg = intent.message;
+        setAssistToast(msg);
+        return msg.trim() ? msg : null;
       }
 
       switch (intent.intent) {
-        case "heat_on":
+        case "heat_on": {
           setPendingHeatConfirm(true);
-          setAssistToast(intent.message || "Confirm to turn the heater on.");
-          break;
-        case "heat_off":
+          const msg = intent.message || "Confirm to turn the heater on.";
+          setAssistToast(msg);
+          return msg;
+        }
+        case "heat_off": {
           await sendRelay("off");
-          setAssistToast(intent.message || "Heater off.");
-          break;
-        case "heat_auto":
+          const msg = intent.message || "Heater off.";
+          setAssistToast(msg);
+          return msg;
+        }
+        case "heat_auto": {
           await sendRelay("auto");
-          setAssistToast(intent.message || "Automatic mode.");
-          break;
-        default:
-          setAssistToast(intent.message);
+          const msg = intent.message || "Automatic mode.";
+          setAssistToast(msg);
+          return msg;
+        }
+        default: {
+          const msg = intent.message;
+          setAssistToast(msg);
+          return msg.trim() ? msg : null;
+        }
       }
     },
     [outdoor, sendRelay, status, weather?.isSnowy],
@@ -123,7 +145,8 @@ export default function App() {
       void (async () => {
         setVoiceBusy(true);
         try {
-          await applyVoiceIntent(text);
+          const msg = await applyVoiceIntent(text);
+          if (msg) maybeSpeak(msg);
         } catch (e) {
           setAssistToast(e instanceof Error ? e.message : "Voice command failed");
         } finally {
@@ -131,18 +154,22 @@ export default function App() {
         }
       })();
     });
-  }, [applyVoiceIntent, relayBusy, speech, voiceBusy]);
+  }, [applyVoiceIntent, maybeSpeak, relayBusy, speech, voiceBusy]);
 
   const confirmHeatFromModal = useCallback(() => {
     setPendingHeatConfirm(false);
     void sendRelay("on");
-    setAssistToast("Heater pad is on.");
-  }, [sendRelay]);
+    const msg = "Heater pad is on.";
+    setAssistToast(msg);
+    maybeSpeak(msg);
+  }, [maybeSpeak, sendRelay]);
 
   const cancelHeatModal = useCallback(() => {
     setPendingHeatConfirm(false);
-    setAssistToast("Cancelled heating request.");
-  }, []);
+    const msg = "Cancelled heating request.";
+    setAssistToast(msg);
+    maybeSpeak(msg);
+  }, [maybeSpeak]);
 
   const voiceLabel = !speech.supported
     ? "Mic unavailable"
@@ -199,6 +226,7 @@ export default function App() {
             onClick={() => {
               setAssistToast(null);
               speech.clearLastError();
+              stopSpeech();
             }}
           >
             ×
@@ -207,27 +235,29 @@ export default function App() {
       )}
 
       <footer className="control-dock" aria-label="Driveway controls">
-        <div className="dock-inner">
-          <div className="dock-section dock-relay">
-            <div className="dock-heading">Heater pad</div>
-            <div className="dock-line">
-              Relay:{" "}
-              <strong>
-                <span className={heatingOn ? "accent-on" : undefined}>{heatingOn ? "On" : "Off"}</span>
-              </strong>
-              <span className="dock-sep">·</span>
-              <span className="dock-muted">
-                {relayMode === "on" ? "Manual ON" : relayMode === "off" ? "Manual OFF" : "Automatic"}
+        <div className="dock-row">
+          <div className="dock-panel">
+            <div className="panel-top">
+              <h2 className="panel-title">Heater pad</h2>
+              <span className={heatingOn ? "status-pill status-pill--heat" : "status-pill"}>
+                {heatingOn ? "Heat on" : "Heat off"}
               </span>
             </div>
-            <div className="relay-actions">
+            <p className="panel-sub">
+              {relayMode === "on"
+                ? "You are overriding: manual on"
+                : relayMode === "off"
+                ? "You are overriding: manual off"
+                : "Controller logic: automatic"}
+            </p>
+            <div className="btn-toolbar" role="group" aria-label="Relay mode">
               <button type="button" className="btn btn-primary" disabled={relayBusy} onClick={() => void sendRelay("on")}>
-                On
+                Turn on
               </button>
               <button type="button" className="btn btn-danger" disabled={relayBusy} onClick={() => void sendRelay("off")}>
-                Off
+                Turn off
               </button>
-              <button type="button" className="btn" disabled={relayBusy} onClick={() => void sendRelay("auto")}>
+              <button type="button" className="btn btn-secondary" disabled={relayBusy} onClick={() => void sendRelay("auto")}>
                 Auto
               </button>
               <button
@@ -246,49 +276,54 @@ export default function App() {
             </div>
             {!groqConfigured ? (
               <p className="dock-hint">
-                Voice answers need a Groq key: copy <code>.env.example</code> to <code>.env.local</code>.
+                Voice needs a Groq key — add to <code>.env.local</code> (see <code>.env.example</code>).
+              </p>
+            ) : !ttsConfigured ? (
+              <p className="dock-hint">
+                Optional: <code>VITE_ELEVENLABS_API_KEY</code> in <code>.env.local</code> for spoken replies.
               </p>
             ) : null}
           </div>
 
-          <div className="dock-section dock-sensors">
-            <div className="dock-heading">Sensors &amp; controller</div>
+          <div className="dock-panel dock-panel--metrics">
+            <div className="panel-top">
+              <h2 className="panel-title">Live readings</h2>
+            </div>
             {relayErr ? <div className="alert inline">{relayErr}</div> : null}
             {fetchError ? <div className="alert inline">{fetchError}</div> : null}
             {status ? (
-              <div className="sensor-grid">
-                <div className="sensor-cell">
-                  <span className="r-label">State</span>
-                  <span className="r-value mono">{status.state}</span>
+              <div className="sensor-tiles">
+                <div className="sensor-tile">
+                  <span className="tile-label">Temperature (A2)</span>
+                  <span className="tile-value">{sensorOk ? `${sensorC.toFixed(1)} °C` : "—"}</span>
                 </div>
-                <div className="sensor-cell">
-                  <span className="r-label">Temp (A2)</span>
-                  <span className="r-value mono">{sensorOk ? `${sensorC.toFixed(1)} °C` : "—"}</span>
-                </div>
-                <div className="sensor-cell">
-                  <span className="r-label">Moisture A0 / A1</span>
-                  <span className="r-value mono">
-                    {status.moistureA0 >= 0 ? status.moistureA0 : "—"} / {status.moistureA1 >= 0 ? status.moistureA1 : "—"}
+                <div className="sensor-tile">
+                  <span className="tile-label">Moisture A0 · A1</span>
+                  <span className="tile-value tab-nums">
+                    {status.moistureA0 >= 0 ? status.moistureA0 : "—"}
+                    <span className="tile-sep">·</span>
+                    {status.moistureA1 >= 0 ? status.moistureA1 : "—"}
                   </span>
                 </div>
-                <div className="sensor-cell">
-                  <span className="r-label">Temp ADC raw → smooth</span>
-                  <span className="r-value mono">
-                    {status.tempAdcRaw != null && status.tempAdcRaw >= 0 ? status.tempAdcRaw : "—"} → {status.tempAdc >= 0 ? status.tempAdc : "—"}
+                <div className="sensor-tile sensor-tile--wide">
+                  <span className="tile-label">Temp ADC (raw → smoothed)</span>
+                  <span className="tile-value tab-nums">
+                    {status.tempAdcRaw != null && status.tempAdcRaw >= 0 ? status.tempAdcRaw : "—"}
+                    <span className="tile-arrow">→</span>
+                    {status.tempAdc >= 0 ? status.tempAdc : "—"}
                   </span>
                 </div>
-                <div className="sensor-cell span-wide">
-                  <span className="r-label">Last sample</span>
-                  <span className="r-value mono">{fmtTime(status.ts)}</span>
+                <div className="sensor-tile sensor-tile--wide">
+                  <span className="tile-label">Last sample</span>
+                  <span className="tile-value tile-value--muted">{fmtTime(status.ts)}</span>
                 </div>
               </div>
             ) : !fetchError ? (
-              <p className="dock-muted">Waiting for /api/status…</p>
+              <p className="panel-wait">Waiting for controller…</p>
             ) : null}
           </div>
-
-          <p className="dock-orbit">3D: drag to orbit, scroll to zoom.</p>
         </div>
+        <p className="dock-orbit">3D view — drag to orbit, scroll to zoom</p>
       </footer>
     </div>
   );

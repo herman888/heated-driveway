@@ -19,9 +19,9 @@ static const uint8_t PIN_MOISTURE_ADC = A0;
 static const uint8_t PIN_TEMP_ADC = A2;     // Grove temperature analog output (estimated)
 static const uint8_t PIN_RELAY = 7;          // Relay control pin (Grove D7)
 
-// Many relay modules are "active LOW" on their IN pin.
-// If your relay turns ON when you write LOW, keep this true.
-static const bool RELAY_ACTIVE_LOW = true;
+// false = HIGH energizes the relay (common for some Grove boards). true = active-LOW input.
+// If heater runs when UI shows Off (or vice versa), flip this.
+static const bool RELAY_ACTIVE_LOW = false;
 
 // ---------------------------
 // ADC / TEMP CONVERSION

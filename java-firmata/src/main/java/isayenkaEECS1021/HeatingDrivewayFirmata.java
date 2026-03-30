@@ -25,8 +25,9 @@ public class HeatingDrivewayFirmata {
         static final int D7 = 7; // Grove relay on D7
     }
 
-    // Many relay modules are "active LOW" on their IN pin (LOW = relay ON).
-    static final boolean RELAY_ACTIVE_LOW = true;
+    // false = relay energizes when D7 is HIGH (many Grove / active-HIGH inputs).
+    // true  = active-LOW input (LOW energizes relay). Change if On/Off feel swapped in the UI vs hardware.
+    static final boolean RELAY_ACTIVE_LOW = false;
 
     // ADC conversion (UNO default analog reference ~5V)
     static final float ADC_VREF = 5.0f;
