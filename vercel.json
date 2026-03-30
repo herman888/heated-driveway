@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "cd homeowner-dashboard && npm install",
+  "buildCommand": "cd homeowner-dashboard && npm run build",
+  "outputDirectory": "homeowner-dashboard/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
