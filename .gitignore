@@ -13,3 +13,8 @@ node_modules/
 .env.local
 **/.env
 **/.env.local
+
+# OS / local reference copies
+.DS_Store
+**/.DS_Store
+.city_sync_ref/
